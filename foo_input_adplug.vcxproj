@@ -133,12 +133,14 @@
     <ClInclude Include="opl\dbopl.h" />
     <ClInclude Include="fileprovider.h" />
     <ClInclude Include="resource.h" />
+    <ClInclude Include="simple_convolver.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="lanczos_resampler.c" />
     <ClCompile Include="opl\dbopl.cpp" />
     <ClCompile Include="fileprovider.cpp" />
     <ClCompile Include="foo_input_adplug.cpp" />
+    <ClCompile Include="simple_convolver.c" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="foo_input_adplug.rc" />
