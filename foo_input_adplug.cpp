@@ -5,7 +5,7 @@
 /*
 	change log
 
-2013-11-25 03:31 UTC - kode54
+2013-11-26 00:30 UTC - kode54
 - Implemented simple time domain impulse convolver based on ESS-FM chip
 - Version is now 1.45
 
@@ -427,8 +427,8 @@ public:
 					m_emu->update( intermediate_buffer.get_ptr(), to_write );
 					for ( unsigned i = 0; i < to_write; i++ )
 						lanczos_resampler_write_sample( m_resampler,
-							convolver_process( m_convolver[0], intermediate_buffer[ i * 2 ] ),
-							convolver_process( m_convolver[1], intermediate_buffer[ i * 2 + 1 ] ) );
+							intermediate_buffer[ i * 2 ],
+							intermediate_buffer[ i * 2 + 1 ] );
 				}
 				
 				/* if ( !lanczos_resampler_ready( m_resampler ) ) break; */ /* We assume that by filling the input buffer completely every pass, there will always be samples ready. */
@@ -454,12 +454,6 @@ public:
 		else
 		{
 			m_emu->update( intermediate_buffer.get_ptr(), sample_count );
-
-			for ( unsigned i = 0; i < sample_count; ++i )
-			{
-				intermediate_buffer[ i * 2 + 0 ] = convolver_process( m_convolver[0], intermediate_buffer[ i * 2 + 0 ] );
-				intermediate_buffer[ i * 2 + 1 ] = convolver_process( m_convolver[1], intermediate_buffer[ i * 2 + 1 ] );
-			}
 
 			p_chunk.set_data_fixedpoint( intermediate_buffer.get_ptr(), sample_count * 4, srate, 2, 16, audio_chunk::channel_config_stereo );
 
