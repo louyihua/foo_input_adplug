@@ -5,9 +5,17 @@
 /*
 	change log
 
+2014-04-14 06:25 UTC - kode54
+- Updated Adplug's YMF262 emulator
+- Replaced lanczos_resampler.c with resampler.c, which improves downsampling quality
+- Disabled the convolver, as the impulse is wrong, and my implementation is quite slow
+- Version is now 1.45
+
+2014-01-26 08:26 UTC - kode54
+- Generated a proper minimum phase impulse for the convolver
+
 2013-11-26 00:30 UTC - kode54
 - Implemented simple time domain impulse convolver based on ESS-FM chip
-- Version is now 1.45
 
 2013-05-05 17:56 UTC - kode54
 - Changed optimization settings
@@ -111,7 +119,9 @@
 #include <kemuopl.h>
 #include "opl/dbemuopl.h"
 
+#ifdef USE_CONVOLVER
 #include "simple_convolver.h"
+#endif
 
 // {0BD2647E-90FE-4d99-BE78-D3DCC5B22E87}
 static const GUID guid_cfg_samplerate = 
@@ -217,19 +227,21 @@ static Copl * create_adlib_surround( unsigned core, unsigned srate )
 	return new CSurroundopl( a, b, true );
 }
 
-#include "lanczos_resampler.h"
+#include "resampler.h"
 
 static struct init_lanczos
 {
-	init_lanczos() { lanczos_init(); }
-} g_lanczos_initializer;
+	init_lanczos() { resampler_init(); }
+} g_resampler_initializer;
 
 class input_adplug
 {
 	CPlayer        * m_player;
 	Copl           * m_emu;
-	void           * m_resampler;
+	void           * m_resampler[2];
+#ifdef USE_CONVOLVER
 	void           * m_convolver[2];
+#endif
 
 	t_filestats m_stats;
 
@@ -251,18 +263,24 @@ public:
 	{
 		m_player = 0;
 		m_emu = 0;
-		m_resampler = 0;
+		m_resampler[0] = 0;
+		m_resampler[1] = 0;
+#ifdef USE_CONVOLVER
 		m_convolver[0] = 0;
 		m_convolver[1] = 0;
+#endif
 	}
 
 	~input_adplug()
 	{
 		delete m_player;
 		delete m_emu;
-		if ( m_resampler ) lanczos_resampler_delete( m_resampler );
+		if ( m_resampler[0] ) resampler_delete( m_resampler[0] );
+		if ( m_resampler[1] ) resampler_delete( m_resampler[1] );
+#ifdef USE_CONVOLVER
 		convolver_delete( m_convolver[0] );
 		convolver_delete( m_convolver[1] );
+#endif
 	}
 
 	void open( service_ptr_t<file> m_file, const char * p_path, t_input_open_reason p_reason, abort_callback & p_abort )
@@ -284,15 +302,22 @@ public:
 
 		if ( srate != 49716 )
 		{
-			m_resampler = lanczos_resampler_create();
-			if ( !m_resampler )
+			m_resampler[0] = resampler_create();
+			m_resampler[1] = resampler_create();
+			if ( !m_resampler[0] || !m_resampler[1] )
 				throw exception_io_data( "Failed to initialize resampler" );
 
-			lanczos_resampler_set_rate( m_resampler, 49716. / (double)srate );
+			resampler_set_quality( m_resampler[0], RESAMPLER_QUALITY_MAX );
+			resampler_set_quality( m_resampler[1], RESAMPLER_QUALITY_MAX );
+
+			resampler_set_rate( m_resampler[0], 49716. / (double)srate );
+			resampler_set_rate( m_resampler[1], 49716. / (double)srate );
 		}
 
+#ifdef USE_CONVOLVER
 		m_convolver[0] = convolver_create();
 		m_convolver[1] = convolver_create();
+#endif
 
 
 		pfc::string8 path = p_path;
@@ -382,11 +407,15 @@ public:
 
 		m_emu->init();
 
-		if ( m_resampler )
-			lanczos_resampler_clear( m_resampler );
+		if ( m_resampler[0] )
+			resampler_clear( m_resampler[0] );
+		if ( m_resampler[1] )
+			resampler_clear( m_resampler[1] );
 
+#ifdef USE_CONVOLVER
 		convolver_clear( m_convolver[0] );
 		convolver_clear( m_convolver[1] );
+#endif
 
 		m_player->rewind( subsong );
 
@@ -415,27 +444,36 @@ public:
 		unsigned sample_count = samples_todo;
 		if ( sample_count > 2048 ) sample_count = 2048;
 
-		if ( m_resampler )
+		if ( m_resampler[0] )
 		{
 			unsigned samples_written = 0;
 
 			while ( sample_count )
 			{
-				int to_write = lanczos_resampler_get_free_count( m_resampler );
+				int to_write = resampler_get_free_count( m_resampler[0] );
 				if ( to_write )
 				{
 					m_emu->update( intermediate_buffer.get_ptr(), to_write );
 					for ( unsigned i = 0; i < to_write; i++ )
-						lanczos_resampler_write_sample( m_resampler,
-							intermediate_buffer[ i * 2 ],
-							intermediate_buffer[ i * 2 + 1 ] );
+					{
+#ifdef USE_CONVOLVER
+						resampler_write_sample( m_resampler[0],
+							convolver_process( m_convolver[ 0 ], intermediate_buffer[ i * 2 ] ) );
+						resampler_write_sample( m_resampler[1],
+							convolver_process( m_convolver[ 1 ], intermediate_buffer[ i * 2 + 1 ] ) );
+#else
+						resampler_write_sample( m_resampler[0], intermediate_buffer[i * 2] );
+						resampler_write_sample( m_resampler[1], intermediate_buffer[i * 2 + 1] );
+#endif
+					}
 				}
 				
 				/* if ( !lanczos_resampler_ready( m_resampler ) ) break; */ /* We assume that by filling the input buffer completely every pass, there will always be samples ready. */
 
-				int ls, rs;
-				lanczos_resampler_get_sample( m_resampler, &ls, &rs );
-				lanczos_resampler_remove_sample( m_resampler );
+				int ls = resampler_get_sample( m_resampler[0] );
+				int rs = resampler_get_sample( m_resampler[1] );
+				resampler_remove_sample( m_resampler[0] );
+				resampler_remove_sample( m_resampler[1] );
 
 				sample_buffer[ samples_written++ ] = ls;
 				sample_buffer[ samples_written++ ] = rs;
@@ -455,6 +493,14 @@ public:
 		{
 			m_emu->update( intermediate_buffer.get_ptr(), sample_count );
 
+#ifdef USE_CONVOLVER
+			for ( int i = 0; i < sample_count; ++i )
+			{
+				intermediate_buffer[ i * 2 + 0 ] = convolver_process( m_convolver[ 0 ], intermediate_buffer[ i * 2 + 0 ] );
+				intermediate_buffer[ i * 2 + 1 ] = convolver_process( m_convolver[ 1 ], intermediate_buffer[ i * 2 + 1 ] );
+			}
+#endif
+
 			p_chunk.set_data_fixedpoint( intermediate_buffer.get_ptr(), sample_count * 4, srate, 2, 16, audio_chunk::channel_config_stereo );
 
 			samples_todo -= sample_count;
@@ -469,11 +515,15 @@ public:
 
 		samples_todo = 0;
 
-		if ( m_resampler )
-			lanczos_resampler_clear( m_resampler );
+		if ( m_resampler[0] )
+			resampler_clear( m_resampler[0] );
+		if ( m_resampler[1] )
+			resampler_clear( m_resampler[1] );
 
+#ifdef USE_CONVOLVER
 		convolver_clear( m_convolver[0] );
 		convolver_clear( m_convolver[1] );
+#endif
 
 		if ( p_seconds < seconds )
 		{

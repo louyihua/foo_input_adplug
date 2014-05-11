@@ -17,8 +17,8 @@
       <Filter>OPL</Filter>
     </ClInclude>
     <ClInclude Include="resource.h" />
-    <ClInclude Include="lanczos_resampler.h" />
     <ClInclude Include="simple_convolver.h" />
+    <ClInclude Include="resampler.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="fileprovider.cpp" />
@@ -26,8 +26,8 @@
     <ClCompile Include="opl\dbopl.cpp">
       <Filter>OPL</Filter>
     </ClCompile>
-    <ClCompile Include="lanczos_resampler.c" />
     <ClCompile Include="simple_convolver.c" />
+    <ClCompile Include="resampler.c" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="foo_input_adplug.rc" />
