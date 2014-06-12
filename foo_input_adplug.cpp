@@ -1,9 +1,16 @@
-#define MYVERSION "1.45"
+#define MYVERSION "1.46"
 
 #define DISABLE_ADL // currently broken
 
+#define USE_CONVOLVER
+
 /*
 	change log
+
+2014-06-12 05:50 UTC - kode54
+- Enabled convolver again, now with an equalizer generated impulse, partially truncated
+- Made convolver optional, enabled to use ESS FM preset by default
+- Version is now 1.46
 
 2014-04-14 06:25 UTC - kode54
 - Updated Adplug's YMF262 emulator
@@ -138,19 +145,30 @@ static const GUID guid_cfg_adlib_core =
 // {60CD2195-2C70-4BFF-BEE1-C4C09226A2B2}
 static const GUID guid_cfg_adlib_surround = 
 { 0x60cd2195, 0x2c70, 0x4bff, { 0xbe, 0xe1, 0xc4, 0xc0, 0x92, 0x26, 0xa2, 0xb2 } };
+#ifdef USE_CONVOLVER
+// {06219814-62E9-4B12-847F-CC4E631F2112}
+static const GUID guid_cfg_equalizer_preset = 
+{ 0x6219814, 0x62e9, 0x4b12, { 0x84, 0x7f, 0xcc, 0x4e, 0x63, 0x1f, 0x21, 0x12 } };
+#endif
 
 enum
 {
 	default_cfg_samplerate = 44100,
 	default_cfg_play_indefinitely = 0,
 	default_cfg_adlib_core = 0,
+#ifdef USE_CONVOLVER
+	default_cfg_equalizer_preset = 1,
+#endif
 	default_cfg_adlib_surround = 0
 };
 
-static cfg_int cfg_samplerate( guid_cfg_samplerate, 44100 );
-static cfg_int cfg_play_indefinitely( guid_cfg_play_indefinitely, 0 );
-static cfg_int cfg_adlib_core( guid_cfg_adlib_core, 0 );
-static cfg_int cfg_adlib_surround( guid_cfg_adlib_surround, 0 );
+static cfg_int cfg_samplerate( guid_cfg_samplerate, default_cfg_samplerate );
+static cfg_int cfg_play_indefinitely( guid_cfg_play_indefinitely, default_cfg_play_indefinitely );
+static cfg_int cfg_adlib_core( guid_cfg_adlib_core, default_cfg_adlib_core );
+static cfg_int cfg_adlib_surround( guid_cfg_adlib_surround, default_cfg_adlib_surround );
+#ifdef USE_CONVOLVER
+static cfg_int cfg_equalizer_preset( guid_cfg_equalizer_preset, default_cfg_equalizer_preset );
+#endif
 
 static critical_section  g_database_lock;
 static t_filestats       g_database_stats = {0};
@@ -315,8 +333,8 @@ public:
 		}
 
 #ifdef USE_CONVOLVER
-		m_convolver[0] = convolver_create();
-		m_convolver[1] = convolver_create();
+		m_convolver[0] = convolver_create( cfg_equalizer_preset );
+		m_convolver[1] = convolver_create( cfg_equalizer_preset );
 #endif
 
 
@@ -688,6 +706,9 @@ public:
 		COMMAND_HANDLER_EX(IDC_SAMPLERATE, CBN_SELCHANGE, OnSelectionChange)
 		DROPDOWN_HISTORY_HANDLER(IDC_SAMPLERATE, cfg_history_rate)
 		COMMAND_HANDLER_EX(IDC_ADLIBCORE, CBN_SELCHANGE, OnSelectionChange)
+#ifdef USE_CONVOLVER
+		COMMAND_HANDLER_EX(IDC_EQUALIZER, CBN_SELCHANGE, OnSelectionChange)
+#endif
 	END_MSG_MAP()
 private:
 	BOOL OnInitDialog(CWindow, LPARAM);
@@ -724,6 +745,13 @@ BOOL CMyPreferences::OnInitDialog(CWindow, LPARAM) {
 	uSendMessageText( w, CB_ADDSTRING, 0, "Jarek Burczynski's" );
 	::SendMessage( w, CB_SETCURSEL, cfg_adlib_core, 0 );
 
+#ifdef USE_CONVOLVER
+	w = GetDlgItem( IDC_EQUALIZER );
+	uSendMessageText( w, CB_ADDSTRING, 0, "None" );
+	uSendMessageText( w, CB_ADDSTRING, 0, "ESS FM" );
+	::SendMessage( w, CB_SETCURSEL, cfg_equalizer_preset, 0 );
+#endif
+
 	SendDlgItemMessage( IDC_PLAY_INDEFINITELY, BM_SETCHECK, cfg_play_indefinitely );
 	SendDlgItemMessage( IDC_SURROUND, BM_SETCHECK, cfg_adlib_surround );
 
@@ -751,6 +779,9 @@ t_uint32 CMyPreferences::get_state() {
 void CMyPreferences::reset() {
 	SetDlgItemInt( IDC_SAMPLERATE, default_cfg_samplerate, FALSE );
 	SendDlgItemMessage( IDC_ADLIBCORE, CB_SETCURSEL, default_cfg_adlib_core );
+#ifdef USE_CONVOLVER
+	SendDlgItemMessage( IDC_EQUALIZER, CB_SETCURSEL, default_cfg_equalizer_preset );
+#endif
 	SendDlgItemMessage( IDC_PLAY_INDEFINITELY, BM_SETCHECK, default_cfg_play_indefinitely );
 	SendDlgItemMessage( IDC_SURROUND, BM_SETCHECK, default_cfg_adlib_surround );
 	
@@ -767,6 +798,9 @@ void CMyPreferences::apply() {
 	cfg_history_rate.add_item(temp);
 	cfg_samplerate = t;
 	cfg_adlib_core = SendDlgItemMessage( IDC_ADLIBCORE, CB_GETCURSEL );
+#ifdef USE_CONVOLVER
+	cfg_equalizer_preset = SendDlgItemMessage( IDC_EQUALIZER, CB_GETCURSEL );
+#endif
 	cfg_play_indefinitely = SendDlgItemMessage( IDC_PLAY_INDEFINITELY, BM_GETCHECK );
 	cfg_adlib_surround = SendDlgItemMessage( IDC_SURROUND, BM_GETCHECK );
 	
@@ -777,6 +811,9 @@ bool CMyPreferences::HasChanged() {
 	//returns whether our dialog content is different from the current configuration (whether the apply button should be enabled or not)
 	return GetDlgItemInt( IDC_SAMPLERATE, NULL, FALSE ) != cfg_samplerate ||
 		SendDlgItemMessage( IDC_ADLIBCORE, CB_GETCURSEL ) != cfg_adlib_core ||
+#ifdef USE_CONVOLVER
+		SendDlgItemMessage( IDC_EQUALIZER, CB_GETCURSEL ) != cfg_equalizer_preset ||
+#endif
 		SendDlgItemMessage( IDC_PLAY_INDEFINITELY, BM_GETCHECK ) != cfg_play_indefinitely ||
 		SendDlgItemMessage( IDC_SURROUND, BM_GETCHECK ) != cfg_adlib_surround;
 }

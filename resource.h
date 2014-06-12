@@ -10,6 +10,8 @@
 #define IDC_ADLIBCORE                   1003
 #define IDC_PLAY_INDEFINITELY2          1004
 #define IDC_SURROUND                    1004
+#define IDC_ADLIBCORE2                  1005
+#define IDC_EQUALIZER                   1005
 
 // Next default values for new objects
 // 
