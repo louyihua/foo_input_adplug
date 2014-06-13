@@ -7,9 +7,13 @@
 /*
 	change log
 
+2014-06-13 22:15 UTC - kode54
+- Replaced the ESS FM impulse with one which was hand equalized by passing_by, fitting
+  since it was captured from his own ESS FM
+- Version is now 1.46
+
 2014-06-13 05:23 UTC - kode54
 - Fixed a possible looping bug with IMF files
-- Version is now 1.46
 
 2014-06-13 04:52 UTC - kode54
 - Implemented new convolver based on KISS-FFT
