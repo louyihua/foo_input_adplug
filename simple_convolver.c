@@ -2,6 +2,13 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
+
+#include "kissfft/kiss_fftr.h"
+
+enum { null_impulse_size = 1 };
+
+static const float null_impulse[null_impulse_size] = { 1.0 };
 
 enum { ess_impulse_size = 1024 };
 
@@ -139,10 +146,13 @@ static const float ess_impulse[ess_impulse_size] =
 
 typedef struct convolver_state
 {
-	int pointer;
-	int impulse_size;
-	const float * impulse;
-	// ... float buffer[impulse size - 1];
+	int fftlen;
+	int stepsize;
+	int buffered_in;
+	int buffered_out;
+	kiss_fftr_cfg cfg_fw, cfg_bw;
+	kiss_fft_cpx *f_out, *f_ir;
+	float *revspace, *outspace, *inspace;
 } convolver_state;
 
 void * convolver_create(int preset_no)
@@ -150,11 +160,13 @@ void * convolver_create(int preset_no)
 	convolver_state * state;
 	int impulse_size;
 	const float * impulse;
+	int fftlen;
+	float * impulse_temp;
 	switch (preset_no)
 	{
 	default:
-		impulse_size = 1;
-		impulse = NULL;
+		impulse_size = null_impulse_size;
+		impulse = null_impulse;
 		break;
 
 	case 1:
@@ -162,55 +174,204 @@ void * convolver_create(int preset_no)
 		impulse = ess_impulse;
 		break;
 	}
-	state = (convolver_state *) calloc( 1, sizeof( convolver_state ) + sizeof(float) * ( impulse_size - 1 ) );
-	state->impulse_size = impulse_size;
-	state->impulse = impulse;
+	state = (convolver_state *) calloc( 1, sizeof( convolver_state ) );
+
+	if ( !state )
+		return NULL;
+
+	fftlen = ( impulse_size * 3 ) / 2 + 10000;
+	{
+		// round up to a power of two
+		int pow = 1;
+		while ( fftlen > 2 ) { pow++; fftlen /= 2; }
+		fftlen = 2 << pow;
+	}
+
+	if ( fftlen < 32768 )
+		fftlen = 32768;
+
+	if ( fftlen > 1024 + impulse_size + 10 )
+	{
+		int current;
+
+		fftlen = 1024 + impulse_size + 10;
+
+#define TRYFACTOR(n) if ( failed && current*n > fftlen ) { current *= n; failed = 0; }
+		
+		current = 1;
+		while ( current < fftlen )
+		{
+			int failed = 1;
+			TRYFACTOR(2)
+			TRYFACTOR(3)
+			TRYFACTOR(5)
+			TRYFACTOR(6)
+			TRYFACTOR(9)
+			TRYFACTOR(10)
+			TRYFACTOR(12)
+			TRYFACTOR(15)
+			TRYFACTOR(18)
+			TRYFACTOR(20)
+			TRYFACTOR(25)
+			TRYFACTOR(30)
+			TRYFACTOR(36)
+			TRYFACTOR(45)
+			TRYFACTOR(75)
+			if ( failed )
+				current *= 4;
+		}
+#undef TRYFACTOR
+
+		fftlen = current;
+	}
+
+	state->fftlen = fftlen;
+	state->stepsize = fftlen - impulse_size - 10;
+	state->buffered_in = 0;
+	state->buffered_out = 0;
+
+	if ( (state->f_out = (kiss_fft_cpx*) KISS_FFT_MALLOC(sizeof(kiss_fft_cpx) * (fftlen/2+1))) == NULL )
+		goto error;
+	if ( (state->f_ir = (kiss_fft_cpx*) KISS_FFT_MALLOC(sizeof(kiss_fft_cpx) * (fftlen/2+1))) == NULL )
+		goto error;
+	if ( (state->revspace = (float *) KISS_FFT_MALLOC(sizeof(float) * fftlen)) == NULL )
+		goto error;
+	if ( (state->outspace = (float *) calloc(1, sizeof(float) * fftlen)) == NULL )
+		goto error;
+	if ( (state->inspace = (float *) calloc(1, sizeof(float) * fftlen)) == NULL )
+		goto error;
+
+	if ( (state->cfg_fw = kiss_fftr_alloc( fftlen, 0, NULL, NULL )) == NULL )
+		goto error;
+	if ( (state->cfg_bw = kiss_fftr_alloc( fftlen, 1, NULL, NULL )) == NULL )
+		goto error;
+
+	if ( (impulse_temp = (float*) malloc( sizeof(float) * fftlen )) == NULL )
+		goto error;
+
+	memcpy( impulse_temp, impulse, impulse_size * sizeof(float) );
+	memset( impulse_temp + impulse_size, 0, sizeof(float) * (fftlen - impulse_size) );
+
+	kiss_fftr( state->cfg_fw, impulse_temp, state->f_ir );
+
+	free( impulse_temp );
+
 	return state;
+
+error:
+	convolver_delete( state );
+	return NULL;
 }
 
-void convolver_delete( void * state )
+void convolver_delete( void * state_ )
 {
-	if ( state )
+	if ( state_ )
+	{
+		convolver_state * state = (convolver_state *) state_;
+		if ( state->cfg_fw )
+			kiss_fftr_free( state->cfg_fw );
+		if ( state->cfg_bw )
+			kiss_fftr_free( state->cfg_bw );
+		if ( state->f_ir )
+			KISS_FFT_FREE( state->f_ir );
+		if ( state->f_out )
+			KISS_FFT_FREE( state->f_out );
+		if ( state->revspace )
+			KISS_FFT_FREE( state->revspace );
+		if ( state->outspace )
+			free( state->outspace );
+		if ( state->inspace )
+			free( state->inspace );
 		free( state );
-}
-
-void convolver_clear( void * state )
-{
-	if ( state )
-	{
-		convolver_state * st = (convolver_state *) state;
-		st->pointer = 0;
-		memset( st + 1, 0, sizeof(float) * ( st->impulse_size - 1 ) );
 	}
 }
 
-short convolver_process( void * _state, short sample )
+void convolver_clear( void * state_ )
 {
-	convolver_state * state = ( convolver_state * ) _state;
-	const float * impulse = state->impulse;
-	const int impulse_size = state->impulse_size;
-	float * buffer = (float *)(state + 1);
-	float out_sample;
-	int clipped_sample;
-	int i, j;
-
-	if ( state->impulse_size == 1 )
-		return sample;
-
-	out_sample = (float)sample * impulse[0];
-	if ( !state ) return 0;
-	for ( i = 1, j = state->pointer; i < impulse_size, j < impulse_size - 1; ++i, ++j )
+	if ( state_ )
 	{
-		out_sample += impulse[i] * buffer[j];
+		convolver_state * state = (convolver_state *) state_;
+		state->buffered_in = 0;
+		state->buffered_out = 0;
+		memset( state->inspace, 0, sizeof(float) * state->fftlen );
+		memset( state->outspace, 0, sizeof(float) * state->fftlen );
 	}
-	for ( j = 0; i < impulse_size; ++i, ++j )
+}
+
+int convolver_get_free_count(void * state_)
+{
+	if ( state_ )
 	{
-		out_sample += impulse[i] * buffer[j];
+		convolver_state * state = (convolver_state *) state_;
+		return state->stepsize - state->buffered_in;
 	}
-	state->pointer = (state->pointer + impulse_size - 2) % (impulse_size - 1);
-	buffer[state->pointer] = (float)sample;
-	clipped_sample = (int)out_sample;
-	if ( (unsigned)(clipped_sample + 0x8000) & 0xffff0000 )
-		clipped_sample = (clipped_sample >> 31) ^ 0x7fff;
-	return (short)clipped_sample;
+	return 0;
+}
+
+int convolver_ready(void * state_)
+{
+	if ( state_ )
+	{
+		convolver_state * state = (convolver_state *) state_;
+		return state->buffered_out;
+	}
+	return 0;
+}
+
+void convolver_write(void * state_, short sample)
+{
+	if ( state_ )
+	{
+		convolver_state * state = (convolver_state *) state_;
+		state->inspace[ state->buffered_in++ ] = sample;
+		if ( state->buffered_in == state->stepsize )
+		{
+			int i, fftlen;
+			float fftlen_if;
+			kiss_fft_cpx *f_ir = state->f_ir;
+			kiss_fft_cpx *f_out = state->f_out;
+			float *outspace = state->outspace;
+			float *revspace = state->revspace;
+
+			kiss_fftr( state->cfg_fw, state->inspace, state->f_out );
+
+			for ( i = 0, fftlen = state->fftlen / 2 + 1; i < fftlen; ++i )
+			{
+				float re = f_ir[i].r * f_out[i].r - f_ir[i].i * f_out[i].i;
+				float im = f_ir[i].i * f_out[i].r + f_ir[i].r * f_out[i].i;
+				f_out[i].r = re;
+				f_out[i].i = im;
+			}
+
+			kiss_fftri( state->cfg_bw, f_out, revspace );
+
+			for (i = 0, fftlen = state->fftlen, fftlen_if = 1.0f / (float)fftlen; i < fftlen; ++i)
+				outspace[i] += revspace[i] * fftlen_if;
+
+			state->buffered_out = state->stepsize;
+			state->buffered_in = 0;
+		}
+	}
+}
+
+short convolver_read(void *state_)
+{
+	if ( state_ )
+	{
+		convolver_state * state = (convolver_state *) state_;
+
+		if ( state->buffered_out )
+		{
+			int sample_clipped = (int) state->outspace[state->stepsize - state->buffered_out];
+			if ( --state->buffered_out == 0 )
+			{
+				memmove( state->outspace, state->outspace + state->stepsize, (state->fftlen - state->stepsize) * sizeof(float) );
+				memset( state->outspace + state->fftlen - state->stepsize, 0, state->stepsize * sizeof(float) );
+			}
+			if ( (unsigned)( sample_clipped + 0x8000 ) & 0xffff0000 )
+				sample_clipped = ( sample_clipped >> 31 ) ^ 0x7fff;
+			return sample_clipped;
+		}
+	}
+	return 0;
 }

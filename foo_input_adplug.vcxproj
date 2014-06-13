@@ -127,6 +127,9 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="kissfft\kiss_fft.h" />
+    <ClInclude Include="kissfft\kiss_fftr.h" />
+    <ClInclude Include="kissfft\_kiss_fft_guts.h" />
     <ClInclude Include="opl\adlib.h" />
     <ClInclude Include="opl\dbemuopl.h" />
     <ClInclude Include="opl\dbopl.h" />
@@ -136,6 +139,8 @@
     <ClInclude Include="simple_convolver.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="kissfft\kiss_fft.c" />
+    <ClCompile Include="kissfft\kiss_fftr.c" />
     <ClCompile Include="opl\dbopl.cpp" />
     <ClCompile Include="fileprovider.cpp" />
     <ClCompile Include="foo_input_adplug.cpp" />
@@ -164,6 +169,10 @@
     <ProjectReference Include="..\SDK\foobar2000_SDK.vcxproj">
       <Project>{e8091321-d79d-4575-86ef-064ea1a4a20d}</Project>
     </ProjectReference>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="kissfft\COPYING" />
+    <None Include="kissfft\README" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

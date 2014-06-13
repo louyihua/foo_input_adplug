@@ -4,6 +4,9 @@
     <Filter Include="OPL">
       <UniqueIdentifier>{d98a4e88-0d10-43b8-b4b0-66ad4ad7c016}</UniqueIdentifier>
     </Filter>
+    <Filter Include="kissfft">
+      <UniqueIdentifier>{99ce413d-bed3-41b1-875d-6450ab6f3c3b}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="fileprovider.h" />
@@ -19,6 +22,15 @@
     <ClInclude Include="resource.h" />
     <ClInclude Include="simple_convolver.h" />
     <ClInclude Include="resampler.h" />
+    <ClInclude Include="kissfft\_kiss_fft_guts.h">
+      <Filter>kissfft</Filter>
+    </ClInclude>
+    <ClInclude Include="kissfft\kiss_fft.h">
+      <Filter>kissfft</Filter>
+    </ClInclude>
+    <ClInclude Include="kissfft\kiss_fftr.h">
+      <Filter>kissfft</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="fileprovider.cpp" />
@@ -28,8 +40,22 @@
     </ClCompile>
     <ClCompile Include="simple_convolver.c" />
     <ClCompile Include="resampler.c" />
+    <ClCompile Include="kissfft\kiss_fft.c">
+      <Filter>kissfft</Filter>
+    </ClCompile>
+    <ClCompile Include="kissfft\kiss_fftr.c">
+      <Filter>kissfft</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="foo_input_adplug.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="kissfft\COPYING">
+      <Filter>kissfft</Filter>
+    </None>
+    <None Include="kissfft\README">
+      <Filter>kissfft</Filter>
+    </None>
   </ItemGroup>
 </Project>

@@ -8,7 +8,10 @@ extern "C" {
 void * convolver_create(int preset_no);
 void convolver_delete(void *);
 void convolver_clear(void *);
-short convolver_process(void *, short);
+int convolver_get_free_count(void *);
+void convolver_write(void *, short);
+int convolver_ready(void *);
+short convolver_read(void *);
 
 #ifdef __cplusplus
 }

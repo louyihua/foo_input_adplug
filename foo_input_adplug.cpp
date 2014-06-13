@@ -7,10 +7,16 @@
 /*
 	change log
 
+2014-06-13 05:23 UTC - kode54
+- Fixed a possible looping bug with IMF files
+- Version is now 1.46
+
+2014-06-13 04:52 UTC - kode54
+- Implemented new convolver based on KISS-FFT
+
 2014-06-12 05:50 UTC - kode54
 - Enabled convolver again, now with an equalizer generated impulse, partially truncated
 - Made convolver optional, enabled to use ESS FM preset by default
-- Version is now 1.46
 
 2014-04-14 06:25 UTC - kode54
 - Updated Adplug's YMF262 emulator
@@ -271,6 +277,8 @@ class input_adplug
 
 	double seconds;
 
+	bool eof;
+
 	pfc::array_t< t_int16 > intermediate_buffer;
 	pfc::array_t< t_int32 > sample_buffer;
 
@@ -420,6 +428,8 @@ public:
 
 		seconds = 0;
 
+		eof = false;
+
 		subsong = p_subsong;
 		/*if ( is_adl ) subsong = -1;*/
 
@@ -443,24 +453,44 @@ public:
 		dont_loop = !! ( p_flags & input_flag_no_looping ) || !cfg_play_indefinitely;
 	}
 
+	bool render(int16_t * sample_buffer, int count)
+	{
+		bool running = true;
+		while ( count )
+		{
+			if ( !samples_todo )
+			{
+				running = m_player->update() && running;
+				if ( !dont_loop || running )
+				{
+					samples_todo = 49716 / m_player->getrefresh();
+					seconds += 1.0 / m_player->getrefresh();
+				}
+			}
+			if ( !samples_todo )
+				break;
+			int samples_now = samples_todo;
+			if ( samples_now > count )
+				samples_now = count;
+			m_emu->update( sample_buffer, samples_now );
+			sample_buffer += samples_now * 2;
+			samples_todo -= samples_now;
+			count -= samples_now;
+		}
+		if ( count )
+			memset( sample_buffer, 0, count * 4 );
+		return !running;
+	}
+
 public:
 	bool decode_run(audio_chunk & p_chunk,abort_callback & p_abort)
 	{
 		p_abort.check();
 
-		if ( !samples_todo )
-		{
-			bool ret = m_player->update();
+		if ( dont_loop && eof )
+			return false;
 
-			if ( dont_loop && !ret ) return false;
-
-			samples_todo = srate / m_player->getrefresh();
-
-			seconds += 1. / m_player->getrefresh();
-		}
-
-		unsigned sample_count = samples_todo;
-		if ( sample_count > 2048 ) sample_count = 2048;
+		unsigned sample_count = 2048;
 
 		if ( m_resampler[0] )
 		{
@@ -469,21 +499,38 @@ public:
 			while ( sample_count )
 			{
 				int to_write = resampler_get_free_count( m_resampler[0] );
-				if ( to_write )
+				while ( to_write )
 				{
+#ifdef USE_CONVOLVER
+					int samples_ready = convolver_ready( m_convolver[0] );
+					if ( !samples_ready )
+					{
+						int to_fill = convolver_get_free_count( m_convolver[0] );
+						intermediate_buffer.grow_size( to_fill * 2 );
+						eof = render( intermediate_buffer.get_ptr(), to_fill );
+						for ( unsigned i = 0; i < to_fill; i++ )
+						{
+							convolver_write( m_convolver[0], intermediate_buffer[i * 2 + 0] );
+							convolver_write( m_convolver[1], intermediate_buffer[i * 2 + 1] );
+						}
+						samples_ready = convolver_ready( m_convolver[0] );
+					}
+					if ( samples_ready > to_write )
+						samples_ready = to_write;
+					for ( unsigned i = 0; i < samples_ready; i++ )
+					{
+						resampler_write_sample( m_resampler[0], convolver_read( m_convolver[0] ) );
+						resampler_write_sample( m_resampler[1], convolver_read( m_convolver[1] ) );
+					}
+					to_write -= samples_ready;
+#else
 					m_emu->update( intermediate_buffer.get_ptr(), to_write );
 					for ( unsigned i = 0; i < to_write; i++ )
 					{
-#ifdef USE_CONVOLVER
-						resampler_write_sample( m_resampler[0],
-							convolver_process( m_convolver[ 0 ], intermediate_buffer[ i * 2 ] ) );
-						resampler_write_sample( m_resampler[1],
-							convolver_process( m_convolver[ 1 ], intermediate_buffer[ i * 2 + 1 ] ) );
-#else
 						resampler_write_sample( m_resampler[0], intermediate_buffer[i * 2] );
 						resampler_write_sample( m_resampler[1], intermediate_buffer[i * 2 + 1] );
-#endif
 					}
+#endif
 				}
 				
 				/* if ( !lanczos_resampler_ready( m_resampler ) ) break; */ /* We assume that by filling the input buffer completely every pass, there will always be samples ready. */
@@ -503,25 +550,42 @@ public:
 			p_chunk.set_channels( 2, audio_chunk::channel_config_stereo );
 			p_chunk.set_sample_count( samples_written / 2 );
 
-			samples_todo -= samples_written / 2;
-
 			audio_math::convert_from_int32( sample_buffer.get_ptr(), samples_written, p_chunk.get_data(), 1 << 8 );
 		}
 		else
 		{
-			m_emu->update( intermediate_buffer.get_ptr(), sample_count );
-
 #ifdef USE_CONVOLVER
-			for ( int i = 0; i < sample_count; ++i )
+			int samples_done = 0;
+			while ( samples_done < sample_count )
 			{
-				intermediate_buffer[ i * 2 + 0 ] = convolver_process( m_convolver[ 0 ], intermediate_buffer[ i * 2 + 0 ] );
-				intermediate_buffer[ i * 2 + 1 ] = convolver_process( m_convolver[ 1 ], intermediate_buffer[ i * 2 + 1 ] );
+				int samples_ready = convolver_ready( m_convolver[0] );
+				if ( !samples_ready )
+				{
+					int to_fill = convolver_get_free_count( m_convolver[0] );
+					intermediate_buffer.grow_size( ( samples_done + to_fill ) * 2 );
+					eof = render( intermediate_buffer.get_ptr() + samples_done * 2, to_fill );
+					for ( unsigned i = 0; i < to_fill; i++ )
+					{
+						convolver_write( m_convolver[0], intermediate_buffer[(samples_done + i) * 2 + 0] );
+						convolver_write( m_convolver[1], intermediate_buffer[(samples_done + i) * 2 + 1] );
+					}
+					samples_ready = convolver_ready( m_convolver[0] );
+				}
+				int samples_todo = sample_count - samples_done;
+				if ( samples_todo > samples_ready )
+					samples_todo = samples_ready;
+				for ( unsigned i = 0; i < samples_todo; i++ )
+				{
+					intermediate_buffer[(samples_done + i) * 2 + 0] = convolver_read( m_convolver[0] );
+					intermediate_buffer[(samples_done + i) * 2 + 1] = convolver_read( m_convolver[1] );
+				}
+				samples_done += samples_todo;
 			}
+#else
+			m_emu->update( intermediate_buffer.get_ptr(), sample_count );
 #endif
 
 			p_chunk.set_data_fixedpoint( intermediate_buffer.get_ptr(), sample_count * 4, srate, 2, 16, audio_chunk::channel_config_stereo );
-
-			samples_todo -= sample_count;
 		}
 		
 		return true;
@@ -530,6 +594,8 @@ public:
 	void decode_seek( double p_seconds, abort_callback & p_abort )
 	{
 		first_block = true;
+
+		eof = false;
 
 		samples_todo = 0;
 
@@ -556,7 +622,7 @@ public:
 			seconds += 1. / m_player->getrefresh();
 		}
 
-		samples_todo = ( seconds - p_seconds ) * srate;
+		samples_todo = ( seconds - p_seconds ) * 49716.0f;
 	}
 
 	bool decode_can_seek()
