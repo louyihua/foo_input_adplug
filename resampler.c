@@ -455,7 +455,7 @@ static int resampler_run_blep(resampler * r, float ** out_, float * out_end)
             sample = *in++ - last_amp;
             last_amp += sample;
             sample /= kernel_sum;
-            for (sample = 0, i = 0; i < SINC_WIDTH * 2; ++i)
+            for (i = 0; i < SINC_WIDTH * 2; ++i)
                 out[i] += sample * kernel[i];
             
             inv_phase += inv_phase_inc;
